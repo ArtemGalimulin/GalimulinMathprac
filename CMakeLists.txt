@@ -5,6 +5,7 @@ set(CMAKE_CXX_FLAGS "-std=c++11 -g")
 
 add_executable(example example.cpp)
 add_executable(torus torus.cpp)
+add_executable(stl stl.cpp)
 
 add_library(gmsh SHARED IMPORTED)
 set_target_properties(gmsh PROPERTIES
@@ -13,3 +14,4 @@ set_target_properties(gmsh PROPERTIES
 )
 
 target_link_libraries(torus gmsh)
+target_link_libraries(stl gmsh)
