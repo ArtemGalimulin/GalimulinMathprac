@@ -21,25 +21,46 @@ protected:
   double x;
   double y;
   double z;
+  double x0;
+  double y0;
+  double z0;
   double smth;
   double vx;
   double vy;
   double vz;
 
 public:
-  CalcNode() : x(0.0), y(0.0), z(0.0), smth(0.0), vx(0.0), vy(0.0), vz(0.0) {
+  CalcNode() : x(0.0), y(0.0), z(0.0),
+               x0(0.0), y0(0.0), z0(0.0),
+               smth(0.0), vx(0.0), vy(0.0), vz(0.0) {
   }
 
   CalcNode(double x, double y, double z, double smth, double vx, double vy, double vz)
-    : x(x), y(y), z(z), smth(smth), vx(vx), vy(vy), vz(vz) {
+    : x(x), y(y), z(z), x0(x), y0(y), z0(z), smth(smth), vx(vx), vy(vy), vz(vz) {
   }
 
   void move(double tau, unsigned int step) {
-    x += vx * tau;
-    y += vy * tau;
-    z += vz * tau;
-    double t = tau * step * 10;
-    smth = sin(0.3 * x * cos(t) + 0.3 * z * sin(t));
+    // белка машет хвостом вдали от точки его присоединения как
+    // вокруг оси, а вблизи перехода там плавный переход, задающийся весом
+    // поэтому хвост не как отдельное, а будто присоединен к белке
+    // этот вес как раз и отображается цветом
+    double t = step * tau;
+    double omega = 3.0;
+    double A = 0.5;
+    double dist_to_plane = (z0 - (53.0 - 3.6 * y0)) / sqrt(1.0 + 3.6 * 3.6);
+    double transition = 6.0;
+    double weight = 0.5 * (1.0 + tanh(dist_to_plane / transition));
+    double theta = weight * A * sin(omega * t);
+    double dtheta = weight * A * omega * cos(omega * t);
+    double dist = sqrt(x0 * x0 + (y0 - 15.0) * (y0 - 15.0));
+    double phi0 = atan2(y0 - 15.0, x0);
+
+    x = dist * cos(phi0 + theta);
+    y = dist * sin(phi0 + theta) + 15.0;
+    vx = dist * dtheta * (-sin(phi0 + theta));
+    vy = dist * dtheta * (cos(phi0 + theta));
+
+    smth = weight;
   }
 };
 
@@ -63,7 +84,8 @@ public:
       double pointX = nodesCoords[i * 3];
       double pointY = nodesCoords[i * 3 + 1];
       double pointZ = nodesCoords[i * 3 + 2];
-      double smth = sin(pointX * 0.1);
+      // double smth = sin(pointX * 0.1);
+      double smth = 1;
       nodes[i] = CalcNode(pointX, pointY, pointZ, smth, 0.0, 0.0, 0.0);
     }
 
@@ -77,7 +99,7 @@ public:
   }
 
   void doTimeStep(double tau, unsigned int step) {
-    for (unsigned int i = 0; i < nodes.size(); i++) {
+    for (unsigned int i = 0; i < nodes.size(); ++i) {
       nodes[i].move(tau, step);
     }
   }
@@ -87,7 +109,7 @@ public:
     vtkSmartPointer<vtkPoints> dumpPoints = vtkSmartPointer<vtkPoints>::New();
 
     auto smth = vtkSmartPointer<vtkDoubleArray>::New();
-    smth->SetName("smth");
+    smth->SetName("tail measure");
 
     auto vel = vtkSmartPointer<vtkDoubleArray>::New();
     vel->SetName("velocity");
@@ -115,7 +137,7 @@ public:
       unstructuredGrid->InsertNextCell(tetra->GetCellType(), tetra->GetPointIds());
     }
 
-    string fileName = "pic-" + std::to_string(snap_number) + ".vtu";
+    string fileName = "moving-" + std::to_string(snap_number) + ".vtu";
     vtkSmartPointer<vtkXMLUnstructuredGridWriter> writer = vtkSmartPointer<vtkXMLUnstructuredGridWriter>::New();
     writer->SetFileName(fileName.c_str());
     writer->SetDataModeToAscii(); // это важно, а то иначе 3д не работает
@@ -198,7 +220,7 @@ int main() {
 
   // gmsh::finalize();
 
-  for (unsigned int step = 1; step < 201; ++step) {
+  for (unsigned int step = 1; step < 220; ++step) {
     mesh.doTimeStep(tau, step);
     mesh.snapshot(step);
   }

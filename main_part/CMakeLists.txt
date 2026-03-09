@@ -4,6 +4,7 @@ set(CMAKE_CXX_FLAGS "-std=c++11")
 
 project(squirrel_vis)
 add_executable(func func.cpp)
+add_executable(moving moving.cpp)
 
 
 # --- Подключаем gmsh для третьего примера, тут делайте так же, как у вас сработало в первой лабе
@@ -38,3 +39,6 @@ include(${VTK_USE_FILE})
 
 target_link_libraries(func ${VTK_LIBRARIES})
 target_link_libraries(func ${GMSH_LIBRARIES})
+
+target_link_libraries(moving ${VTK_LIBRARIES})
+target_link_libraries(moving ${GMSH_LIBRARIES})
