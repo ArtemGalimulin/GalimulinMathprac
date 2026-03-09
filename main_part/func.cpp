@@ -34,10 +34,12 @@ public:
     : x(x), y(y), z(z), smth(smth), vx(vx), vy(vy), vz(vz) {
   }
 
-  void move(double tau) {
+  void move(double tau, unsigned int step) {
     x += vx * tau;
     y += vy * tau;
     z += vz * tau;
+    double t = tau * step * 10;
+    smth = sin(0.3 * x * cos(t) + 0.3 * z * sin(t));
   }
 };
 
@@ -61,7 +63,7 @@ public:
       double pointX = nodesCoords[i * 3];
       double pointY = nodesCoords[i * 3 + 1];
       double pointZ = nodesCoords[i * 3 + 2];
-      double smth = pow(pointX, 2) + pow(pointY, 2) + pow(pointZ, 2);
+      double smth = sin(pointX * 0.1);
       nodes[i] = CalcNode(pointX, pointY, pointZ, smth, 0.0, 0.0, 0.0);
     }
 
@@ -74,9 +76,9 @@ public:
     }
   }
 
-  void doTimeStep(double tau) {
+  void doTimeStep(double tau, unsigned int step) {
     for (unsigned int i = 0; i < nodes.size(); i++) {
-      nodes[i].move(tau);
+      nodes[i].move(tau, step);
     }
   }
 
@@ -113,7 +115,7 @@ public:
       unstructuredGrid->InsertNextCell(tetra->GetCellType(), tetra->GetPointIds());
     }
 
-    string fileName = "func-step-" + std::to_string(snap_number) + ".vtu";
+    string fileName = "pic-" + std::to_string(snap_number) + ".vtu";
     vtkSmartPointer<vtkXMLUnstructuredGridWriter> writer = vtkSmartPointer<vtkXMLUnstructuredGridWriter>::New();
     writer->SetFileName(fileName.c_str());
     writer->SetDataModeToAscii(); // это важно, а то иначе 3д не работает
@@ -123,7 +125,7 @@ public:
 };
 
 int main() {
-  double h = 4.0;
+  double h = 6.0;
   double tau = 0.01;
 
   const unsigned int GMSH_TETR_CODE = 4;
@@ -158,7 +160,7 @@ int main() {
   gmsh::model::geo::synchronize();
 
   int f = gmsh::model::mesh::field::add("MathEval");
-  gmsh::model::mesh::field::setString(f, "F", "4");
+  gmsh::model::mesh::field::setString(f, "F", std::to_string(h));
   gmsh::model::mesh::field::setAsBackgroundMesh(f);
 
   gmsh::model::mesh::generate(3);
@@ -187,16 +189,19 @@ int main() {
 
   cout << "The model has " << nodeTags.size() << " nodes and " << tetrsNodesTags->size() / 4 << " tetrs." << endl;
 
-  for(int i = 0; i < nodeTags.size(); ++i) {
+  for (int i = 0; i < nodeTags.size(); ++i) {
     assert(i == nodeTags[i] - 1);
   }
   assert(tetrsNodesTags->size() % 4 == 0);
 
   CalcMesh mesh(nodesCoord, *tetrsNodesTags);
 
-  gmsh::finalize();
+  // gmsh::finalize();
 
-  mesh.snapshot(0);
+  for (unsigned int step = 1; step < 101; ++step) {
+    mesh.doTimeStep(tau, step);
+    mesh.snapshot(step);
+  }
 
   return 0;
 }
