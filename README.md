@@ -28,10 +28,11 @@ lab_2
   - moving.cpp - код где белка хвостом виляет
   
   - видео:
-  https://www.youtube.com/playlist?list=PL8r1yochsYBy6BCRmtr3J7NvOGLjhZyV_
+  https://www.youtube.com/playlist?list=PL8r1yochsYBy6BCRmtr3J7NvOGLjhZyV_ (если скопировать и вставить, то работает)
 
 
 lab_3
 
   - fenics/my-poisson - аналогично демо
+
 
