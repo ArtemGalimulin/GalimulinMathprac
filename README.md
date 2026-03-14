@@ -36,3 +36,12 @@ lab_3
   - fenics/my-poisson - аналогично демо
 
 
+UPD:
+
+Теперь в lab_2/main_part картинки белки с фильтрами
+
+    - clip.png
+    
+    - slice+glyph.png
+    
+Теперь в lab_3/fenics/my-poisson добавлен README.md
