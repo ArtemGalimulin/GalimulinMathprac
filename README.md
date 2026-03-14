@@ -40,8 +40,8 @@ UPD:
 
 Теперь в lab_2/main_part картинки белки с фильтрами
 
-    - clip.png
+  - clip.png
     
-    - slice+glyph.png
+  - slice+glyph.png
     
 Теперь в lab_3/fenics/my-poisson добавлен README.md
