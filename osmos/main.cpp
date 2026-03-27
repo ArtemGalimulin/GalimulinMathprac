@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-#include "Particle.cpp"
 #include "Vec3.cpp"
 #include "config.cpp"
 
@@ -30,7 +29,6 @@ struct Particle {
   void move(double dt) {
     v += f * (dt / m);
     r += v * dt;
-    f = Vec3(0, 0, 0);
   }
 };
 
@@ -88,19 +86,58 @@ Vec3 generate_maxwell_velocity(int type) {
   return {dist(gen), dist(gen), dist(gen)};
 }
 
+class Integrator {
+  void calculate_forces(std::vector<Particle> &particles) {
+    for (Particle &p : particles)
+      p.f = Vec3(0, 0, 0);
+
+    for (size_t i = 0; i < particles.size(); ++i) {
+      for (size_t j = i + 1; j < particles.size(); ++j) {
+        Particle &p1 = particles[i];
+        Particle &p2 = particles[j];
+
+        Vec3 r12 = p2.r - p1.r;
+        double r2 = r12.norm_sq();
+        if (r2 < config::singularity_threshold) {
+          r2 = config::singularity_threshold;
+        }
+
+        // Параметры взаимодействия (смешивание по правилам Лоренца-Бертло)
+        // sigma_ij = (sigma_i + sigma_j) / 2
+        // epsilon_ij = sqrt(epsilon_i * epsilon_j)
+        double sigma = (p1.sigma + p2.sigma) / 2.0;
+        double epsilon = std::sqrt(p1.epsilon * p2.epsilon);
+
+        double s2 = sigma * sigma;
+        double r_inv2 = s2 / r2;                  // (sigma/r)^2
+        double r_inv6 = r_inv2 * r_inv2 * r_inv2; // (sigma/r)^6
+
+        // Сила Леннарда-Джонса: F = 24 * eps * [2*(sig/r)^12 - (sig/r)^6] / r^2
+        // * r_vec
+        double force_mod = 24.0 * epsilon * r_inv6 * (2.0 * r_inv6 - 1.0) / r2;
+        Vec3 f12 = r12 * force_mod;
+        p1.f -= f12;
+        p2.f += f12;
+      }
+    }
+  }
+
+public:
+  void update(std::vector<Particle> &particles, Box &box, Membrane &membrane,
+              double dt) {
+    calculate_forces(particles);
+    for (Particle &p : particles) {
+      p.move(dt);
+      box.reflect_particle(p);
+      membrane.reflect_particle(p);
+    }
+  }
+};
+
 class Simulation {
   Box box_;
   Membrane membrane_;
   std::vector<Particle> particles_;
-
-  void setup(int N, int concentration) {
-    double lx = box_.lx - membrane_.hw;
-    double ly = box_.ly;
-    double lz = box_.lz;
-    double coef =
-        std::pow(static_cast<double>(N) / 2 / (lx * ly * lz), 1.0 / 3.0);
-    int nx = static_cast<int>(coef * lx);
-  }
 
   void setup_pure_water(int N) {
     double lx_eff = box_.lx - membrane_.hw;
@@ -167,58 +204,51 @@ class Simulation {
     }
   }
 
-public:
-  void save_snapshot(int step) {
-    // Меняем расширение на .xyz
+  void snapshot(int step) {
     std::string filename = "snap_" + std::to_string(step) + ".xyz";
     std::ofstream out(filename);
-
-    if (!out.is_open()) {
-      std::cerr << "Error: Could not open file " << filename << " for writing!" << std::endl;
-      return;
-    }
-
-    // 1. Первая строка: количество частиц
     out << particles_.size() << "\n";
-
-    // 2. Вторая строка: комментарий (номер шага симуляции)
-    out << "Lattice snapshot at step " << step << "\n";
-
-    // 3. Остальные строки: Type X Y Z (через пробел)
+    out << "snap " << std::to_string(step) << '\n';
     for (const Particle &p : particles_) {
-      // В формате XYZ тип частицы обычно идет первым (как символ элемента)
-      // Но OVITO поймет и числовой тип.
-      out << p.type << " "
-          << std::fixed << std::setprecision(6)
-          << p.r.x << " " << p.r.y << " " << p.r.z << "\n";
+      out << p.type << " " << std::fixed << std::setprecision(6) << p.r.x << " "
+          << p.r.y << " " << p.r.z << "\n";
     }
-
     out.close();
   }
 
 public:
   Simulation() : box_(Box()), membrane_(Membrane()), particles_({}) {
     particles_.reserve(config::N);
-
-    std::cout << "Симуляция создана. Размеры коробки: " << box_.lx * 2 << "x"
-              << box_.ly * 2 << "x" << box_.lz * 2 << std::endl;
-  }
-
-  void init_experiment(int target_N) {
-    particles_.clear();
-    setup_pure_water(target_N);
-    setup_solution(target_N);
+    setup_pure_water(config::N);
+    setup_solution(config::N);
     std::cout << "Эксперимент инициализирован. Итого частиц: "
               << particles_.size() << std::endl;
   }
 
-  const std::vector<Particle> &get_particles() const { return particles_; }
+  // const std::vector<Particle> &get_particles() const { return particles_; }
+
+  void run() {
+    Integrator integrator;
+
+    snapshot(0);
+    for (int step = 1; step <= config::total_steps; ++step) {
+      integrator.update(particles_, box_, membrane_, config::dt);
+
+      if (step % config::log_period == 0) {
+        std::cout << "Step: " << step << " / " << config::total_steps
+                  << std::endl;
+      }
+
+      snapshot(step);
+    }
+
+    std::cout << "Симуляция завершена успешно!" << std::endl;
+  }
 };
 
 int main() {
   // std::cout << 123;
 
   Simulation simulation;
-  simulation.init_experiment(config::N);
-  simulation.save_snapshot(0);
+  simulation.run();
 }
