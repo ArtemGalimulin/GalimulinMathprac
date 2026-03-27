@@ -1,0 +1,10 @@
+# Игнорируем всё
+*
+# Но разрешаем папку osmos и её содержимое
+!osmos/
+!osmos/**
+# Также разрешаем сам файл .gitignore
+!.gitignore
+# Игнорируем временные файлы CLion и сборки внутри osmos (если они там есть)
+osmos/cmake-build-debug/
+osmos/.idea/
