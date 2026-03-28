@@ -89,9 +89,20 @@ Vec3 generate_maxwell_velocity(int type) {
 }
 
 class Integrator {
-  double current_mv2_sum = 0.0;
+  double current_mv2_left = 0.0;
+  double current_mv2_right = 0.0;
+  double current_virial_left = 0.0;
+  double current_virial_right = 0.0;
+
+  double accumulated_mv2_left = 0.0;
+  double accumulated_mv2_right = 0.0;
+  double accumulated_virial_left = 0.0;
+  double accumulated_virial_right = 0.0;
+  int steps_in_period = 0;
 
   void calculate_forces(std::vector<Particle> &particles) {
+    current_virial_left = 0.0;
+    current_virial_right = 0.0;
 
     for (size_t i = 0; i < particles.size(); ++i) {
       for (size_t j = i + 1; j < particles.size(); ++j) {
@@ -120,6 +131,15 @@ class Integrator {
         Vec3 f12 = r12 * force_mod;
         p1.f -= f12;
         p2.f += f12;
+
+        double v_pair = r12.dot(f12);           // Вклад пары в вириал
+        double mid_x = (p1.r.x + p2.r.x) / 2.0; // Средняя точка пары
+        // Относим вириал к левому или правому отсеку
+        if (mid_x < 0) {
+          current_virial_left += v_pair;
+        } else {
+          current_virial_right += v_pair;
+        }
       }
     }
   }
@@ -127,7 +147,8 @@ class Integrator {
 public:
   void update(std::vector<Particle> &particles, Box &box, Membrane &membrane,
               double dt) {
-    current_mv2_sum = 0.0;
+    current_mv2_left = 0.0;
+    current_mv2_right = 0.0;
     calculate_forces(particles);
 
     for (Particle &p : particles) {
@@ -135,12 +156,49 @@ public:
       box.reflect_particle(p);
       membrane.reflect_particle(p);
 
-      current_mv2_sum += p.m * p.v.norm_sq();
+      if (p.r.x < 0) {
+        current_mv2_left += p.m * p.v.norm_sq();
+      } else {
+        current_mv2_right += p.m * p.v.norm_sq();
+      }
     }
+
+    accumulated_mv2_left += current_mv2_left;
+    accumulated_mv2_right += current_mv2_right;
+    accumulated_virial_left += current_virial_left;
+    accumulated_virial_right += current_virial_right;
+    ++steps_in_period;
   }
 
-  double get_current_T(int N) const {
-    return current_mv2_sum / (3.0 * N * config::k_b);
+  void reset_accumulation() {
+    accumulated_mv2_left = 0.0;
+    accumulated_mv2_right = 0.0;
+    accumulated_virial_left = 0.0;
+    accumulated_virial_right = 0.0;
+    steps_in_period = 0;
+  }
+
+  double get_T(int N) const {
+    return (accumulated_mv2_left + accumulated_mv2_right) /
+           (3.0 * N * config::k_b * steps_in_period);
+  }
+
+  double get_left_P() const {
+    if (steps_in_period == 0)
+      return 0.0;
+    // P = ( <2K> + <W> ) / 3V
+    double P = (accumulated_mv2_left + accumulated_virial_left) /
+               (3.0 * config::half_volume * steps_in_period);
+    return P * config::P_to_bar; // Перевод в бары
+  }
+
+  double get_right_P() const {
+    if (steps_in_period == 0)
+      return 0.0;
+    // P = ( <2K> + <W> ) / 3V
+    double P = (accumulated_mv2_right + accumulated_virial_right) /
+               (3.0 * config::half_volume * steps_in_period);
+    return P * config::P_to_bar; // Перевод в бары
   }
 };
 
@@ -276,18 +334,31 @@ public:
     Integrator integrator;
 
     snapshot(0);
-    // std::cout << integrator.get_current_T(config::N) << '\n';
 
     for (int step = 1; step <= config::total_steps; ++step) {
       integrator.update(particles_, box_, membrane_, config::dt);
 
-      if (step % config::log_period == 0) {
-        std::cout << "Step: " << step << " / " << config::total_steps
-                  << ", T = " << integrator.get_current_T(N_) << '\n';
-      }
-
       if (step % config::save_period == 0) {
         snapshot(step);
+      }
+
+      if (step % config::log_period == 0) {
+        double p_l = integrator.get_left_P();
+        double p_r = integrator.get_right_P();
+        double t_mean = integrator.get_T(N_);
+
+        std::cout << "Step: " << std::setw(6) << step << " / "
+                  << config::total_steps << " | T: " << std::fixed
+                  << std::setprecision(2) << t_mean << " K"
+                  << " | P_L: " << std::setw(8) << std::setprecision(2) << p_l
+                  << " bar"
+                  << " | P_R: " << std::setw(8) << std::setprecision(2) << p_r
+                  << " bar"
+                  << " | dP: " << std::setw(8) << (p_r - p_l) << " bar"
+                  << std::endl;
+
+        // Сброс накопленных сумм для следующего периода усреднения
+        integrator.reset_accumulation();
       }
     }
     std::cout << "Симуляция завершена успешно!" << std::endl;
