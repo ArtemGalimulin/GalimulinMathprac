@@ -1,4 +1,5 @@
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -135,6 +136,7 @@ public:
 };
 
 class Simulation {
+  std::string name_;
   Box box_;
   Membrane membrane_;
   std::vector<Particle> particles_;
@@ -205,19 +207,40 @@ class Simulation {
   }
 
   void snapshot(int step) {
-    std::string filename = "snap_" + std::to_string(step) + ".xyz";
-    std::ofstream out(filename);
-    out << particles_.size() << "\n";
-    out << "snap " << std::to_string(step) << '\n';
-    for (const Particle &p : particles_) {
-      out << p.type << " " << std::fixed << std::setprecision(6) << p.r.x << " "
-          << p.r.y << " " << p.r.z << "\n";
+    try {
+      std::filesystem::path dir(name_);
+      if (!std::filesystem::exists(dir)) {
+        std::filesystem::create_directories(dir);
+      }
+
+      std::filesystem::path filepath =
+          dir / ("snap_" + std::to_string(step) + ".xyz");
+
+      std::ofstream out(filepath);
+      if (!out.is_open()) {
+        std::cerr << "Error: Could not open file for writing: " << filepath
+                  << std::endl;
+        return;
+      }
+
+      out << particles_.size() << "\n";
+      out << "Simulation: " << name_ << " | Step: " << step << "\n";
+
+      for (const auto &p : particles_) {
+        out << p.type << " " << std::fixed << std::setprecision(6) << p.r.x
+            << " " << p.r.y << " " << p.r.z << "\n";
+      }
+
+      out.close();
+
+    } catch (const std::filesystem::filesystem_error &e) {
+      std::cerr << "Filesystem error: " << e.what() << std::endl;
     }
-    out.close();
   }
 
 public:
-  Simulation() : box_(Box()), membrane_(Membrane()), particles_({}) {
+  Simulation(std::string &sim_name)
+      : name_(sim_name), box_(Box()), membrane_(Membrane()), particles_({}) {
     particles_.reserve(config::N);
     setup_pure_water(config::N);
     setup_solution(config::N);
@@ -225,12 +248,11 @@ public:
               << particles_.size() << std::endl;
   }
 
-  // const std::vector<Particle> &get_particles() const { return particles_; }
-
   void run() {
     Integrator integrator;
 
     snapshot(0);
+
     for (int step = 1; step <= config::total_steps; ++step) {
       integrator.update(particles_, box_, membrane_, config::dt);
 
@@ -239,16 +261,19 @@ public:
                   << std::endl;
       }
 
-      snapshot(step);
+      if (step % config::save_period == 0) {
+        snapshot(step);
+      }
     }
-
     std::cout << "Симуляция завершена успешно!" << std::endl;
   }
 };
 
 int main() {
-  // std::cout << 123;
+  std::cout << "Введите название эксперимента:\n";
+  std::string sim_name;
+  std::cin >> sim_name;
 
-  Simulation simulation;
+  Simulation simulation(sim_name);
   simulation.run();
 }

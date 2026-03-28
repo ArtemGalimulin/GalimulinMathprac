@@ -2,37 +2,43 @@
 #include <cmath>
 
 namespace config {
+// --- Временные параметры ---
+double dt = 0.001;       // [пс] (пикосекунды) - шаг времени
+int total_steps = 20000; // [безразм] общее количество шагов
+int log_period = 100;    // [безразм] период вывода в консоль
+int save_period = 100;   // [безразм] период сохранения для OVITO
 
-double dt = 0.1;
-int total_steps = 100;
-int log_period = 10;
+// --- Параметры ВОДЫ (H2O) ---
+int water_type = 0;           // [безразм] идентификатор типа
+double water_m = 18.015;      // [а.е.м.] (атомные единицы массы)
+double water_sigma = 3.166;   // [Ангстрем] эффективный диаметр молекулы
+double water_epsilon = 0.650; // [кДж/моль]    глубина потенциальной ямы
 
-int water_type = 0;
-double water_m = 1.0;
-double water_sigma = 1.0;
-double water_epsilon = 1.0;
+// --- Параметры ЖЕЛТОЙ КРОВЯНОЙ СОЛИ (K4[Fe(CN)6]) ---
+int salt_type = 1;           // [безразм] идентификатор типа
+double salt_m = 368.35;      // [а.е.м.] масса всего комплекса
+double salt_sigma = 7.500;   // [Ангстрем] диаметр аниона с оболочкой
+double salt_epsilon = 4.500; // [кДж/моль] энергия взаимодействия
 
-int salt_type = 1;
-double salt_m = 5.0;
-double salt_sigma = 2.0;
-double salt_epsilon = 1.0;
+double singularity_threshold =
+    0.1; // [Ангстрем] порог для защиты от деления на 0
 
-double singularity_threshold = 0.0001;
+// --- Геометрия системы ---
+double box_x = 40.0; // [Ангстрем] полудлина бокса по X
+double box_y = 20.0; // [Ангстрем] полуширина по Y
+double box_z = 20.0; // [Ангстрем] полувысота по Z
+double mem_x = 4.0;  // [Ангстрем] полуширина мембраны
 
-double box_x = 20.0;
-double box_y = 20.0;
-double box_z = 20.0;
-double mem_x = 2.0;
+// --- Термодинамика ---
+double T = 293.15;     // [Кельвин] температура (20 градусов Цельсия)
+double k_b = 0.008314; // [кДж/(моль*К)] газовая постоянная R
+double water_mean_v =
+    std::sqrt(k_b * T / water_m); // [Ангстрем/пс] средняя скорость
+double salt_mean_v =
+    std::sqrt(k_b * T / salt_m); // [Ангстрем/пс] средняя скорость
 
-double T = 293.0;
-double k_b = 1.0;
-double water_mean_v = std::sqrt(k_b * T / water_m);
-double salt_mean_v = std::sqrt(k_b * T / salt_m);
-
-double concentration = 0.05;
-int N = 120;
-int salt_period = static_cast<int>(1 / concentration);
-// int salt_N = static_cast<int>(N * 0.05);
-// int water_N = N - salt_N;
-
+// --- Концентрация и количество ---
+double concentration = 0.05; // [безразм] мольная доля соли
+int N = 400;                 // [безразм] общее число частиц
+int salt_period = 20;        // [безразм] каждая 20-я частица - соль
 } // namespace config
