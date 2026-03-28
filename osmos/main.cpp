@@ -27,10 +27,17 @@ struct Particle {
     }
   }
 
-  void move(double dt) {
-    v += f * (dt / m);
+  void move_1(double dt) {
+    // Velocity Verlet part 1
+    v += f * (dt / (2 * m));
     r += v * dt;
-    f = {0, 0, 0};
+    f = {0.0, 0.0, 0.0};
+  }
+
+  void move_2(double dt) {
+    // Velocity Verlet part 2
+    v += f * (dt / (2 * m));
+    f = {0.0, 0.0, 0.0};
   }
 };
 
@@ -149,10 +156,15 @@ public:
               double dt) {
     current_mv2_left = 0.0;
     current_mv2_right = 0.0;
+
+    for (Particle &p : particles) {
+      p.move_1(dt);
+    }
+
     calculate_forces(particles);
 
     for (Particle &p : particles) {
-      p.move(dt);
+      p.move_2(dt);
       box.reflect_particle(p);
       membrane.reflect_particle(p);
 
