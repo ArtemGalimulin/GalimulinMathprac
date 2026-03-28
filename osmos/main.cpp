@@ -30,6 +30,7 @@ struct Particle {
   void move(double dt) {
     v += f * (dt / m);
     r += v * dt;
+    f = {0, 0, 0};
   }
 };
 
@@ -80,7 +81,7 @@ Vec3 generate_maxwell_velocity(int type) {
   static std::mt19937 gen(rd());
 
   double sigma =
-      (type == config::water_type) ? config::water_sigma : config::salt_sigma;
+      (type == config::water_type) ? config::water_mean_v : config::salt_mean_v;
 
   std::normal_distribution<double> dist(0.0, sigma);
 
@@ -88,9 +89,9 @@ Vec3 generate_maxwell_velocity(int type) {
 }
 
 class Integrator {
+  double current_mv2_sum = 0.0;
+
   void calculate_forces(std::vector<Particle> &particles) {
-    for (Particle &p : particles)
-      p.f = Vec3(0, 0, 0);
 
     for (size_t i = 0; i < particles.size(); ++i) {
       for (size_t j = i + 1; j < particles.size(); ++j) {
@@ -99,8 +100,8 @@ class Integrator {
 
         Vec3 r12 = p2.r - p1.r;
         double r2 = r12.norm_sq();
-        if (r2 < config::singularity_threshold) {
-          r2 = config::singularity_threshold;
+        if (r2 < config::singularity_threshold_2) {
+          r2 = config::singularity_threshold_2;
         }
 
         // Параметры взаимодействия (смешивание по правилам Лоренца-Бертло)
@@ -126,12 +127,20 @@ class Integrator {
 public:
   void update(std::vector<Particle> &particles, Box &box, Membrane &membrane,
               double dt) {
+    current_mv2_sum = 0.0;
     calculate_forces(particles);
+
     for (Particle &p : particles) {
       p.move(dt);
       box.reflect_particle(p);
       membrane.reflect_particle(p);
+
+      current_mv2_sum += p.m * p.v.norm_sq();
     }
+  }
+
+  double get_current_T(int N) const {
+    return current_mv2_sum / (3.0 * N * config::k_b);
   }
 };
 
@@ -140,6 +149,18 @@ class Simulation {
   Box box_;
   Membrane membrane_;
   std::vector<Particle> particles_;
+  int N_;
+
+  void rescale_velocities(double T_target) {
+    double T_current = 0.0;
+    for (const auto &p : particles_)
+      T_current += p.m * p.v.norm_sq();
+    T_current /= (3.0 * N_ * config::k_b);
+
+    double scale = std::sqrt(T_target / T_current);
+    for (auto &p : particles_)
+      p.v *= scale;
+  }
 
   void setup_pure_water(int N) {
     double lx_eff = box_.lx - membrane_.hw;
@@ -244,21 +265,25 @@ public:
     particles_.reserve(config::N);
     setup_pure_water(config::N);
     setup_solution(config::N);
-    std::cout << "Эксперимент инициализирован. Итого частиц: "
-              << particles_.size() << std::endl;
+    N_ = static_cast<int>(particles_.size());
+    std::cout << "Эксперимент инициализирован. Итого частиц: " << N_
+              << std::endl;
+    rescale_velocities(config::T);
+    std::cout << "Rescale выполнен, T -> " << config::T << " К\n";
   }
 
   void run() {
     Integrator integrator;
 
     snapshot(0);
+    // std::cout << integrator.get_current_T(config::N) << '\n';
 
     for (int step = 1; step <= config::total_steps; ++step) {
       integrator.update(particles_, box_, membrane_, config::dt);
 
       if (step % config::log_period == 0) {
         std::cout << "Step: " << step << " / " << config::total_steps
-                  << std::endl;
+                  << ", T = " << integrator.get_current_T(N_) << '\n';
       }
 
       if (step % config::save_period == 0) {
