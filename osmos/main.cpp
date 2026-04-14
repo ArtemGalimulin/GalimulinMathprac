@@ -16,11 +16,13 @@ struct Particle {
   int type;
 
   Particle(double x, double y, double z, int t) : r(x, y, z), type(t) {
-    if (type == config::water_type) { // Вода
+    if (type == config::water_type) {
+      // Вода
       m = config::water_m;
       sigma = config::water_sigma;
       epsilon = config::water_epsilon;
-    } else { // Соль
+    } else {
+      // Соль
       m = config::salt_m;
       sigma = config::salt_sigma;
       epsilon = config::salt_epsilon;
@@ -50,7 +52,7 @@ struct Box {
     return std::abs(r.x) < lx && std::abs(r.y) < ly && std::abs(r.z) < lz;
   }
 
-  void reflect_particle(Particle &p) const {
+  void reflect_particle(Particle& p) const {
     if (std::abs(p.r.x) >= lx) {
       p.v.x *= -1.0;
       p.r.x = (p.r.x > 0) ? (2.0 * lx - p.r.x) : (-2.0 * lx - p.r.x);
@@ -73,7 +75,7 @@ struct Membrane {
 
   bool is_inside(Vec3 r) const { return std::abs(r.x) < hw; }
 
-  void reflect_particle(Particle &p) const {
+  void reflect_particle(Particle& p) const {
     if (p.type == config::salt_type) {
       if (is_inside(p.r)) {
         p.v.x *= -1.0;
@@ -107,14 +109,20 @@ class Integrator {
   double accumulated_virial_right = 0.0;
   int steps_in_period = 0;
 
-  void calculate_forces(std::vector<Particle> &particles) {
+  int N_;
+  int Nf_;
+  double K_target_;
+  double c_ = config::bussi_c;
+
+
+  void calculate_forces(std::vector<Particle>& particles) {
     current_virial_left = 0.0;
     current_virial_right = 0.0;
 
     for (size_t i = 0; i < particles.size(); ++i) {
       for (size_t j = i + 1; j < particles.size(); ++j) {
-        Particle &p1 = particles[i];
-        Particle &p2 = particles[j];
+        Particle& p1 = particles[i];
+        Particle& p2 = particles[j];
 
         Vec3 r12 = p2.r - p1.r;
         double r2 = r12.norm_sq();
@@ -129,7 +137,7 @@ class Integrator {
         double epsilon = std::sqrt(p1.epsilon * p2.epsilon);
 
         double s2 = sigma * sigma;
-        double r_inv2 = s2 / r2;                  // (sigma/r)^2
+        double r_inv2 = s2 / r2; // (sigma/r)^2
         double r_inv6 = r_inv2 * r_inv2 * r_inv2; // (sigma/r)^6
 
         // Сила Леннарда-Джонса: F = 24 * eps * [2*(sig/r)^12 - (sig/r)^6] / r^2
@@ -139,7 +147,7 @@ class Integrator {
         p1.f -= f12;
         p2.f += f12;
 
-        double v_pair = r12.dot(f12);           // Вклад пары в вириал
+        double v_pair = r12.dot(f12); // Вклад пары в вириал
         double mid_x = (p1.r.x + p2.r.x) / 2.0; // Средняя точка пары
         // Относим вириал к левому или правому отсеку
         if (mid_x < 0) {
@@ -152,18 +160,22 @@ class Integrator {
   }
 
 public:
-  void update(std::vector<Particle> &particles, Box &box, Membrane &membrane,
+  Integrator(int N, int Nf): N_(N), Nf_(Nf) {
+    K_target_ = 0.5 * Nf_ * config::k_b * config::T;
+  }
+
+  void update(std::vector<Particle>& particles, Box& box, Membrane& membrane,
               double dt) {
     current_mv2_left = 0.0;
     current_mv2_right = 0.0;
 
-    for (Particle &p : particles) {
+    for (Particle& p : particles) {
       p.move_1(dt);
     }
 
     calculate_forces(particles);
 
-    for (Particle &p : particles) {
+    for (Particle& p : particles) {
       p.move_2(dt);
       box.reflect_particle(p);
       membrane.reflect_particle(p);
@@ -182,6 +194,26 @@ public:
     ++steps_in_period;
   }
 
+  void apply_bussi_thermostat(std::vector<Particle>& particles) {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::normal_distribution<double> norm_dist(0.0, 1.0);
+    static std::chi_squared_distribution<double> chi_dist(Nf_ - 1);
+
+    // Формула А7 статьи Canonical sampling through velocity-rescaling
+    double R1 = norm_dist(gen);
+    double sum_Ri2 = chi_dist(gen);
+    double K_old = 0.5 * (current_mv2_left + current_mv2_right);
+    double B = K_target_ / (Nf_ * K_old);
+    double A1 = B * (1 - c_) * (R1 * R1 + sum_Ri2);
+    double A2 = 2 * std::sqrt(c_ * B * (1 - c_)) * R1;
+    double alpha = std::sqrt(c_ + A1 + A2);
+
+    for (auto& p : particles) {
+      p.v *= alpha;
+    }
+  }
+
   void reset_accumulation() {
     accumulated_mv2_left = 0.0;
     accumulated_mv2_right = 0.0;
@@ -192,7 +224,7 @@ public:
 
   double get_T(int N) const {
     return (accumulated_mv2_left + accumulated_mv2_right) /
-           (3.0 * N * config::k_b * steps_in_period);
+           (Nf_ * config::k_b * steps_in_period);
   }
 
   double get_left_P() const {
@@ -220,15 +252,16 @@ class Simulation {
   Membrane membrane_;
   std::vector<Particle> particles_;
   int N_;
+  int Nf_;
 
   void rescale_velocities(double T_target) {
     double T_current = 0.0;
-    for (const auto &p : particles_)
+    for (const auto& p : particles_)
       T_current += p.m * p.v.norm_sq();
-    T_current /= (3.0 * N_ * config::k_b);
+    T_current /= (Nf_ * config::k_b);
 
     double scale = std::sqrt(T_target / T_current);
-    for (auto &p : particles_)
+    for (auto& p : particles_)
       p.v *= scale;
   }
 
@@ -238,7 +271,7 @@ class Simulation {
     double lz_eff = 2.0 * box_.lz;
 
     double coef = std::pow(
-        static_cast<double>(N) / 2.0 / (lx_eff * ly_eff * lz_eff), 1.0 / 3.0);
+      static_cast<double>(N) / 2.0 / (lx_eff * ly_eff * lz_eff), 1.0 / 3.0);
 
     int nx = static_cast<int>(coef * lx_eff);
     int ny = static_cast<int>(coef * ly_eff);
@@ -268,7 +301,7 @@ class Simulation {
     double lz_eff = 2.0 * box_.lz;
 
     double coef = std::pow(
-        static_cast<double>(N) / 2.0 / (lx_eff * ly_eff * lz_eff), 1.0 / 3.0);
+      static_cast<double>(N) / 2.0 / (lx_eff * ly_eff * lz_eff), 1.0 / 3.0);
 
     int nx = static_cast<int>(coef * lx_eff);
     int ny = static_cast<int>(coef * ly_eff);
@@ -286,8 +319,9 @@ class Simulation {
         for (int k = 0; k < nz; ++k) {
           double z = -box_.lz + (k + 0.5) * dz;
 
-          int type = (count % config::salt_period == 0) ? config::salt_type
-                                                        : config::water_type;
+          int type = (count % config::salt_period == 0)
+                       ? config::salt_type
+                       : config::water_type;
 
           particles_.emplace_back(x, y, z, type);
           particles_.back().v = generate_maxwell_velocity(type);
@@ -310,45 +344,49 @@ class Simulation {
       std::ofstream out(filepath);
       if (!out.is_open()) {
         std::cerr << "Error: Could not open file for writing: " << filepath
-                  << std::endl;
+            << std::endl;
         return;
       }
 
       out << particles_.size() << "\n";
       out << "Simulation: " << name_ << " | Step: " << step << "\n";
 
-      for (const auto &p : particles_) {
+      for (const auto& p : particles_) {
         out << p.type << " " << std::fixed << std::setprecision(6) << p.r.x
             << " " << p.r.y << " " << p.r.z << "\n";
       }
 
       out.close();
-
-    } catch (const std::filesystem::filesystem_error &e) {
+    } catch (const std::filesystem::filesystem_error& e) {
       std::cerr << "Filesystem error: " << e.what() << std::endl;
     }
   }
 
 public:
-  Simulation(std::string &sim_name)
-      : name_(sim_name), box_(Box()), membrane_(Membrane()), particles_({}) {
+  Simulation(std::string& sim_name)
+    : name_(sim_name), box_(Box()), membrane_(Membrane()), particles_({}) {
     particles_.reserve(config::N);
     setup_pure_water(config::N);
     setup_solution(config::N);
     N_ = static_cast<int>(particles_.size());
+    Nf_ = 3 * N_ - 3;
     std::cout << "Эксперимент инициализирован. Итого частиц: " << N_
-              << std::endl;
+        << std::endl;
     rescale_velocities(config::T);
     std::cout << "Rescale выполнен, T -> " << config::T << " К\n";
   }
 
   void run() {
-    Integrator integrator;
+    Integrator integrator(N_, Nf_);
 
     snapshot(0);
 
     for (int step = 1; step <= config::total_steps; ++step) {
       integrator.update(particles_, box_, membrane_, config::dt);
+
+      if (step % config::thermostat_period == 0) {
+        integrator.apply_bussi_thermostat(particles_);
+      }
 
       if (step % config::save_period == 0) {
         snapshot(step);
@@ -360,14 +398,14 @@ public:
         double t_mean = integrator.get_T(N_);
 
         std::cout << "Step: " << std::setw(6) << step << " / "
-                  << config::total_steps << " | T: " << std::fixed
-                  << std::setprecision(2) << t_mean << " K"
-                  << " | P_L: " << std::setw(8) << std::setprecision(2) << p_l
-                  << " bar"
-                  << " | P_R: " << std::setw(8) << std::setprecision(2) << p_r
-                  << " bar"
-                  << " | dP: " << std::setw(8) << (p_r - p_l) << " bar"
-                  << std::endl;
+            << config::total_steps << " | T: " << std::fixed
+            << std::setprecision(2) << t_mean << " K"
+            << " | P_L: " << std::setw(8) << std::setprecision(2) << p_l
+            << " bar"
+            << " | P_R: " << std::setw(8) << std::setprecision(2) << p_r
+            << " bar"
+            << " | dP: " << std::setw(8) << (p_r - p_l) << " bar"
+            << std::endl;
 
         // Сброс накопленных сумм для следующего периода усреднения
         integrator.reset_accumulation();
@@ -382,6 +420,14 @@ int main() {
   std::string sim_name;
   std::cin >> sim_name;
 
+  auto start_time = std::chrono::high_resolution_clock::now();
   Simulation simulation(sim_name);
   simulation.run();
+  auto end_time = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> duration = end_time - start_time;
+
+  std::cout << "\n========================================\n";
+  std::cout << "Общее время выполнения: " << std::fixed << std::setprecision(3)
+      << duration.count() << " секунд." << std::endl;
+  std::cout << "========================================\n";
 }
