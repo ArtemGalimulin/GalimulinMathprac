@@ -244,6 +244,14 @@ public:
                (3.0 * config::half_volume * steps_in_period);
     return P * config::P_to_bar; // Перевод в бары
   }
+
+  double get_total_P() const {
+    if (steps_in_period == 0)
+      return 0.0;
+    double P = (accumulated_mv2_left + accumulated_mv2_right + accumulated_virial_left + accumulated_virial_right) /
+               (3.0 * config::volume * steps_in_period);
+    return P * config::P_to_bar; // Перевод в бары
+  }
 };
 
 class Simulation {
@@ -372,8 +380,8 @@ public:
     Nf_ = 3 * N_ - 3;
     std::cout << "Эксперимент инициализирован. Итого частиц: " << N_
         << std::endl;
-    rescale_velocities(config::T);
-    std::cout << "Rescale выполнен, T -> " << config::T << " К\n";
+    // rescale_velocities(config::T);
+    // std::cout << "Rescale выполнен, T -> " << config::T << " К\n";
   }
 
   void run() {
@@ -393,18 +401,18 @@ public:
       }
 
       if (step % config::log_period == 0) {
+        double p = integrator.get_total_P();
         double p_l = integrator.get_left_P();
         double p_r = integrator.get_right_P();
-        double t_mean = integrator.get_T(N_);
+        double t = integrator.get_T(N_);
 
         std::cout << "Step: " << std::setw(6) << step << " / "
             << config::total_steps << " | T: " << std::fixed
-            << std::setprecision(2) << t_mean << " K"
-            << " | P_L: " << std::setw(8) << std::setprecision(2) << p_l
-            << " bar"
-            << " | P_R: " << std::setw(8) << std::setprecision(2) << p_r
-            << " bar"
-            << " | dP: " << std::setw(8) << (p_r - p_l) << " bar"
+            << std::setprecision(2) << t << " K"
+            << " | P: " << std::setw(8) << std::setprecision(2) << p << "bar"
+            << " | P_L: " << std::setw(8) << std::setprecision(2) << p_l << " bar"
+            << " | P_R: " << std::setw(8) << std::setprecision(2) << p_r << " bar"
+            << " | dP: " << std::setw(8) << (p_l - p_r) << " bar"
             << std::endl;
 
         // Сброс накопленных сумм для следующего периода усреднения
