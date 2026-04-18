@@ -44,29 +44,60 @@ struct Particle {
 };
 
 struct Box {
-  double lx = config::box_x; // Полуширина по X
-  double ly = config::box_y; // Полуширина по Y
-  double lz = config::box_z; // Полуширина по Z
+  double lx = config::box_x;
+  double ly = config::box_y;
+  double lz = config::box_z;
+
+  double half_square = 4.0 * (lz * ly + lx * ly + lz * lx);
+  double left_impulse = 0.0;
+  double right_impulse = 0.0;
 
   bool inside(Vec3 r) const {
     return std::abs(r.x) < lx && std::abs(r.y) < ly && std::abs(r.z) < lz;
   }
 
-  void reflect_particle(Particle& p) const {
-    if (std::abs(p.r.x) >= lx) {
+  void reflect_particle(Particle& p) {
+    if (p.r.x >= lx) {
+      right_impulse += 2.0 * p.m * std::abs(p.v.dot({1, 0, 0}));
       p.v.x *= -1.0;
-      p.r.x = (p.r.x > 0) ? (2.0 * lx - p.r.x) : (-2.0 * lx - p.r.x);
+      p.r.x = 2.0 * lx - p.r.x;
+    } else if (p.r.x <= -lx) {
+      left_impulse += 2.0 * p.m * std::abs(p.v.dot({-1, 0, 0}));
+      p.v.x *= -1.0;
+      p.r.x = -2.0 * lx - p.r.x;
     }
 
-    if (std::abs(p.r.y) >= ly) {
+    if (p.r.y >= ly) {
+      right_impulse += 2.0 * p.m * std::abs(p.v.dot({0, 1, 0}));
       p.v.y *= -1.0;
-      p.r.y = (p.r.y > 0) ? (2.0 * ly - p.r.y) : (-2.0 * ly - p.r.y);
+      p.r.y = 2.0 * ly - p.r.y;
+    } else if (p.r.y <= -ly) {
+      left_impulse += 2.0 * p.m * std::abs(p.v.dot({0, -1, 0}));
+      p.v.y *= -1.0;
+      p.r.y = -2.0 * ly - p.r.y;
     }
 
-    if (std::abs(p.r.z) >= lz) {
+    if (p.r.z >= lz) {
+      right_impulse += 2.0 * p.m * std::abs(p.v.dot({0, 0, 1}));
       p.v.z *= -1.0;
-      p.r.z = (p.r.z > 0) ? (2.0 * lz - p.r.z) : (-2.0 * lz - p.r.z);
+      p.r.z = 2.0 * lz - p.r.z;
+    } else if (p.r.z <= -lz) {
+      left_impulse += 2.0 * p.m * std::abs(p.v.dot({0, 0, -1}));
+      p.v.z *= -1.0;
+      p.r.z = -2.0 * lz - p.r.z;
     }
+  }
+
+  double get_left_P(double dt) const {
+    return left_impulse / (dt * half_square) * config::P_to_bar;
+  }
+
+  double get_right_P(double dt) const {
+    return right_impulse / (dt * half_square) * config::P_to_bar;
+  }
+
+  double get_total_P(double dt) const {
+    return (left_impulse + right_impulse) / (dt * 2 * half_square) * config::P_to_bar;
   }
 };
 
@@ -98,15 +129,13 @@ Vec3 generate_maxwell_velocity(int type) {
 }
 
 class Integrator {
+  Box& box_;
+
   double current_mv2_left = 0.0;
   double current_mv2_right = 0.0;
-  double current_virial_left = 0.0;
-  double current_virial_right = 0.0;
 
   double accumulated_mv2_left = 0.0;
   double accumulated_mv2_right = 0.0;
-  double accumulated_virial_left = 0.0;
-  double accumulated_virial_right = 0.0;
   int steps_in_period = 0;
 
   int N_;
@@ -114,11 +143,7 @@ class Integrator {
   double K_target_;
   double c_ = config::bussi_c;
 
-
   void calculate_forces(std::vector<Particle>& particles) {
-    current_virial_left = 0.0;
-    current_virial_right = 0.0;
-
     for (size_t i = 0; i < particles.size(); ++i) {
       for (size_t j = i + 1; j < particles.size(); ++j) {
         Particle& p1 = particles[i];
@@ -146,21 +171,12 @@ class Integrator {
         Vec3 f12 = r12 * force_mod;
         p1.f -= f12;
         p2.f += f12;
-
-        double v_pair = r12.dot(f12); // Вклад пары в вириал
-        double mid_x = (p1.r.x + p2.r.x) / 2.0; // Средняя точка пары
-        // Относим вириал к левому или правому отсеку
-        if (mid_x < 0) {
-          current_virial_left += v_pair;
-        } else {
-          current_virial_right += v_pair;
-        }
       }
     }
   }
 
 public:
-  Integrator(int N, int Nf): N_(N), Nf_(Nf) {
+  Integrator(int N, int Nf, Box& box): N_(N), Nf_(Nf), box_(box) {
     K_target_ = 0.5 * Nf_ * config::k_b * config::T;
   }
 
@@ -189,8 +205,6 @@ public:
 
     accumulated_mv2_left += current_mv2_left;
     accumulated_mv2_right += current_mv2_right;
-    accumulated_virial_left += current_virial_left;
-    accumulated_virial_right += current_virial_right;
     ++steps_in_period;
   }
 
@@ -217,8 +231,8 @@ public:
   void reset_accumulation() {
     accumulated_mv2_left = 0.0;
     accumulated_mv2_right = 0.0;
-    accumulated_virial_left = 0.0;
-    accumulated_virial_right = 0.0;
+    box_.left_impulse = 0.0;
+    box_.right_impulse = 0.0;
     steps_in_period = 0;
   }
 
@@ -228,29 +242,15 @@ public:
   }
 
   double get_left_P() const {
-    if (steps_in_period == 0)
-      return 0.0;
-    // P = ( <2K> + <W> ) / 3V
-    double P = (accumulated_mv2_left + accumulated_virial_left) /
-               (3.0 * config::half_volume * steps_in_period);
-    return P * config::P_to_bar; // Перевод в бары
+    return box_.get_left_P(config::dt * steps_in_period);
   }
 
   double get_right_P() const {
-    if (steps_in_period == 0)
-      return 0.0;
-    // P = ( <2K> + <W> ) / 3V
-    double P = (accumulated_mv2_right + accumulated_virial_right) /
-               (3.0 * config::half_volume * steps_in_period);
-    return P * config::P_to_bar; // Перевод в бары
+    return box_.get_right_P(config::dt * steps_in_period);
   }
 
   double get_total_P() const {
-    if (steps_in_period == 0)
-      return 0.0;
-    double P = (accumulated_mv2_left + accumulated_mv2_right + accumulated_virial_left + accumulated_virial_right) /
-               (3.0 * config::volume * steps_in_period);
-    return P * config::P_to_bar; // Перевод в бары
+    return box_.get_total_P(config::dt * steps_in_period);
   }
 };
 
@@ -262,16 +262,6 @@ class Simulation {
   int N_;
   int Nf_;
 
-  void rescale_velocities(double T_target) {
-    double T_current = 0.0;
-    for (const auto& p : particles_)
-      T_current += p.m * p.v.norm_sq();
-    T_current /= (Nf_ * config::k_b);
-
-    double scale = std::sqrt(T_target / T_current);
-    for (auto& p : particles_)
-      p.v *= scale;
-  }
 
   void setup_pure_water(int N) {
     double lx_eff = box_.lx - membrane_.hw;
@@ -385,7 +375,7 @@ public:
   }
 
   void run() {
-    Integrator integrator(N_, Nf_);
+    Integrator integrator(N_, Nf_, box_);
 
     snapshot(0);
 
@@ -409,7 +399,7 @@ public:
         std::cout << "Step: " << std::setw(6) << step << " / "
             << config::total_steps << " | T: " << std::fixed
             << std::setprecision(2) << t << " K"
-            << " | P: " << std::setw(8) << std::setprecision(2) << p << "bar"
+            << " | P: " << std::setw(8) << std::setprecision(15) << p << "bar"
             << " | P_L: " << std::setw(8) << std::setprecision(2) << p_l << " bar"
             << " | P_R: " << std::setw(8) << std::setprecision(2) << p_r << " bar"
             << " | dP: " << std::setw(8) << (p_r - p_l) << " bar"
