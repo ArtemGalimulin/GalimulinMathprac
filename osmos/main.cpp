@@ -412,7 +412,7 @@ public:
             << " | P: " << std::setw(8) << std::setprecision(2) << p << "bar"
             << " | P_L: " << std::setw(8) << std::setprecision(2) << p_l << " bar"
             << " | P_R: " << std::setw(8) << std::setprecision(2) << p_r << " bar"
-            << " | dP: " << std::setw(8) << (p_l - p_r) << " bar"
+            << " | dP: " << std::setw(8) << (p_r - p_l) << " bar"
             << std::endl;
 
         // Сброс накопленных сумм для следующего периода усреднения
