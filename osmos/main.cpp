@@ -331,7 +331,7 @@ class Simulation {
 
   void snapshot(int step) {
     try {
-      std::filesystem::path dir(name_);
+      std::filesystem::path dir = std::filesystem::path("ovito") / name_;
       if (!std::filesystem::exists(dir)) {
         std::filesystem::create_directories(dir);
       }
@@ -376,8 +376,12 @@ public:
 
   void run() {
     Integrator integrator(N_, Nf_, box_);
-
     snapshot(0);
+
+    std::filesystem::path graphics_dir = std::filesystem::path("graphics") / name_;
+    std::filesystem::create_directories(graphics_dir);
+    std::ofstream data(graphics_dir / "pressure_diff.csv");
+    data << "time_ps,dP,T\n";
 
     for (int step = 1; step <= config::total_steps; ++step) {
       integrator.update(particles_, box_, membrane_, config::dt);
@@ -399,11 +403,13 @@ public:
         std::cout << "Step: " << std::setw(6) << step << " / "
             << config::total_steps << " | T: " << std::fixed
             << std::setprecision(2) << t << " K"
-            << " | P: " << std::setw(8) << std::setprecision(15) << p << "bar"
+            << " | P: " << std::setw(8) << std::setprecision(2) << p << "bar"
             << " | P_L: " << std::setw(8) << std::setprecision(2) << p_l << " bar"
             << " | P_R: " << std::setw(8) << std::setprecision(2) << p_r << " bar"
-            << " | dP: " << std::setw(8) << (p_r - p_l) << " bar"
+            << " | dP: " << std::setw(8) << p_r - p_l << " bar"
             << std::endl;
+
+        data << step * config::dt << "," << p_r - p_l << "," << t << "\n";
 
         // Сброс накопленных сумм для следующего периода усреднения
         integrator.reset_accumulation();

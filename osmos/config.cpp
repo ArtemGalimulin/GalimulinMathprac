@@ -4,18 +4,18 @@
 namespace config {
   // --- Временные параметры ---
   double dt = 0.001; // [пс] (пикосекунды) - шаг времени
-  int total_steps = 20000; // [безразм] общее количество шагов
-  int log_period = 1000; // [безразм] период вывода в консоль
+  int total_steps = 10000; // [безразм] общее количество шагов
+  int log_period = 2000; // [безразм] период вывода в консоль
   int save_period = 1000; // [безразм] период сохранения для OVITO
-  int thermostat_period = 1;
+  int thermostat_period = 1000;
 
   double bussi_tau = 0.01;
   double bussi_c = std::exp(-dt * thermostat_period / bussi_tau);
 
 
   // --- Концентрация и количество ---
-  int N = 500; // [безразм] общее число частиц
-  int salt_period = 1000; // [безразм] каждая такая частица - соль
+    int N = 500; // [безразм] общее число частиц
+  int salt_period = 5; // [безразм] каждая такая частица - соль
 
   // --- Параметры ВОДЫ (H2O) ---
   int water_type = 0; // [безразм] идентификатор типа
