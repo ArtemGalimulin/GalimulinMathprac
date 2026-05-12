@@ -7,7 +7,7 @@ int main(int argc, char** argv) {
   gmsh::model::add("Model");
 
   try {
-    gmsh::merge("../dodge_wrap.stl");
+    gmsh::merge("../dodge_light.stl");
   } catch (...) {
     gmsh::logger::write("Could not load STL mesh: bye!");
     gmsh::finalize();
@@ -23,16 +23,15 @@ int main(int argc, char** argv) {
   std::vector<int> sl;
   for (auto surf : s) sl.push_back(surf.second);
   int carLoop = gmsh::model::geo::addSurfaceLoop(sl);
-  gmsh::model::geo::addVolume({carLoop});
+  int volCar = gmsh::model::geo::addVolume({carLoop});
 
   // Машина: X[-2.32, 0.43]  Y[-2.56, 3.25]  Z[0.0, 2.17]
-  // Увеличиваем отступы до 2 размеров машины
-  double xmin = -2.32 - 5.5; // -7.82
-  double xmax = 0.43 + 5.5; //  5.93
-  double ymin = -2.56 - 8.0; // -10.56  вход
-  double ymax = 3.25 + 15.0; //  18.25  выход
+  double xmin = -2.32 - 2;
+  double xmax = 0.43 + 2;
+  double ymin = -2.56 - 3.0;
+  double ymax = 3.25 + 5.0;
   double zmin = -0.5;
-  double zmax = 2.17 + 5.5; //  7.67
+  double zmax = 2.17 + 2;
 
   int p1 = gmsh::model::geo::addPoint(xmin, ymin, zmin);
   int p2 = gmsh::model::geo::addPoint(xmax, ymin, zmin);
@@ -63,36 +62,59 @@ int main(int argc, char** argv) {
   int cl5 = gmsh::model::geo::addCurveLoop({l3, l12, -l7, -l11});
   int cl6 = gmsh::model::geo::addCurveLoop({l4, l9, -l8, -l12});
 
-  int s1 = gmsh::model::geo::addPlaneSurface({cl1}); // пол
-  int s2 = gmsh::model::geo::addPlaneSurface({cl2}); // потолок
-  int s3 = gmsh::model::geo::addPlaneSurface({cl3}); // вход ymin
-  int s4 = gmsh::model::geo::addPlaneSurface({cl4}); // правая стенка
-  int s5 = gmsh::model::geo::addPlaneSurface({cl5}); // выход ymax
-  int s6 = gmsh::model::geo::addPlaneSurface({cl6}); // левая стенка
+  int s1 = gmsh::model::geo::addPlaneSurface({cl1});
+  int s2 = gmsh::model::geo::addPlaneSurface({cl2});
+  int s3 = gmsh::model::geo::addPlaneSurface({cl3});
+  int s4 = gmsh::model::geo::addPlaneSurface({cl4});
+  int s5 = gmsh::model::geo::addPlaneSurface({cl5});
+  int s6 = gmsh::model::geo::addPlaneSurface({cl6});
 
   int tunnelLoop = gmsh::model::geo::addSurfaceLoop({s1, s2, s3, s4, s5, s6});
-  gmsh::model::geo::addVolume({tunnelLoop, carLoop});
+  int volAir = gmsh::model::geo::addVolume({tunnelLoop, carLoop});
 
   gmsh::model::geo::synchronize();
 
-  // Физические группы — границы для FEniCS
-  gmsh::model::addPhysicalGroup(2, {s3}, 1, "inlet"); // вход потока
-  gmsh::model::addPhysicalGroup(2, {s5}, 2, "outlet"); // выход потока
-  gmsh::model::addPhysicalGroup(2, {s1, s2, s4, s6}, 3, "walls"); // стенки туннеля
-  gmsh::model::addPhysicalGroup(2, sl, 4, "car_wall"); // поверхность машины (no-slip)
-  // Объём воздуха
-  gmsh::model::addPhysicalGroup(3, {2}, 5, "air"); // область расчёта НС
+  gmsh::model::addPhysicalGroup(2, {s3}, 1, "inlet");
+  gmsh::model::addPhysicalGroup(2, {s5}, 2, "outlet");
+  gmsh::model::addPhysicalGroup(2, {s2, s4, s6}, 3, "walls");
+  gmsh::model::addPhysicalGroup(2, {s1}, 4, "floor");
+  gmsh::model::addPhysicalGroup(2, sl, 5, "car_wall");
+  gmsh::model::addPhysicalGroup(3, {volAir}, 6, "air");
 
   int f = gmsh::model::mesh::field::add("MathEval");
   gmsh::model::mesh::field::setString(f, "F", "0.3");
   gmsh::model::mesh::field::setAsBackgroundMesh(f);
+
+  // int f_dist = gmsh::model::mesh::field::add("Distance");
+  // gmsh::model::mesh::field::setNumbers(f_dist, "SurfacesList", {sl.begin(), sl.end()});
+  //
+  // // 2. Настраиваем пороги изменения размера
+  // int f_thresh = gmsh::model::mesh::field::add("Threshold");
+  // gmsh::model::mesh::field::setNumber(f_thresh, "InField", f_dist);
+  //
+  // // Размер ячейки непосредственно НА машине (например, 5 см)
+  // gmsh::model::mesh::field::setNumber(f_thresh, "SizeMin", 0.05);
+  // // Размер ячейки вдали от машины (например, 50 см)
+  // gmsh::model::mesh::field::setNumber(f_thresh, "SizeMax", 1.5);
+  // // Расстояние от машины, до которого размер будет равен SizeMin
+  // gmsh::model::mesh::field::setNumber(f_thresh, "DistMin", 0.3);
+  // // Расстояние, на котором размер плавно вырастет до SizeMax
+  // gmsh::model::mesh::field::setNumber(f_thresh, "DistMax", 1.0);
+  //
+  // // Устанавливаем это поле как основное для построения сетки
+  // gmsh::model::mesh::field::setAsBackgroundMesh(f_thresh);
+  //
+  // // Отключаем влияние других факторов, чтобы работали только наши поля
+  // gmsh::option::setNumber("Mesh.MeshSizeExtendFromBoundary", 0);
+  // gmsh::option::setNumber("Mesh.MeshSizeFromPoints", 0);
+  // gmsh::option::setNumber("Mesh.MeshSizeFromCurvature", 0);
 
   gmsh::option::setNumber("Mesh.MaxNumThreads3D", 8);
   gmsh::option::setNumber("Mesh.Algorithm3D", 1);
   gmsh::option::setNumber("Mesh.Optimize", 0);
 
   gmsh::model::mesh::generate(3);
-  gmsh::write("pickup_ok.msh");
+  gmsh::write("light_03.msh");
 
   std::set<std::string> args(argv, argv + argc);
   if (!args.count("-nopopup")) gmsh::fltk::run();
