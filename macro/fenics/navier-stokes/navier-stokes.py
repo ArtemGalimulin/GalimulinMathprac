@@ -2,7 +2,6 @@ import gmsh
 import numpy as np
 import tqdm.autonotebook
 import petsc4py
-import time
 
 petsc4py.init()
 from petsc4py import PETSc
@@ -26,14 +25,16 @@ from ufl import (
 
 from pathlib import Path
 
+# mpirun -n 4 python3 navier-stokes.py
+
 BASE_DIR = Path(__file__).parent
 
 mesh_comm = MPI.COMM_WORLD
 model_rank = 0
 
-inlet_marker, outlet_marker, wall_marker, car_marker, air_marker = 1, 2, 3, 4, 5
+inlet_marker, outlet_marker, wall_marker, floor_marker, car_marker, air_marker = 1, 2, 3, 4, 5, 6
 gmsh.initialize()
-gmsh.merge(str(BASE_DIR / "pickup_mock.msh"))
+gmsh.merge(str(BASE_DIR / "light_03_relative.msh"))
 mesh_data = gmshio.model_to_mesh(gmsh.model, mesh_comm, model_rank, gdim=3)
 mesh = mesh_data.mesh
 ft = mesh_data.facet_tags
@@ -42,12 +43,13 @@ gmsh.finalize()
 
 t = 0.0
 T = 3.0
-dt = 0.01
+t_acc = 0.1
+dt = 0.005
 num_steps = int(T / dt)
-U_inf = 16.0
+U_inf = 10.0
 k = Constant(mesh, dt)
-mu = Constant(mesh, 1.8e-5)
-rho = Constant(mesh, 1.225)
+mu = Constant(mesh, 0.1)
+rho = Constant(mesh, 1.0)
 
 v_cg2 = element("Lagrange", mesh.basix_cell(), 2, shape=(mesh.geometry.dim,))
 s_cg1 = element("Lagrange", mesh.basix_cell(), 1)
@@ -55,24 +57,33 @@ V = functionspace(mesh, v_cg2)
 Q = functionspace(mesh, s_cg1)
 
 
-def inlet_velocity(x):
-    values = np.zeros((3, x.shape[1]), dtype=float)
-    values[0] = U_inf
-    return values
+class InletVelocity:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self, x):
+        ramp = min(self.t / t_acc, 1.0)
+        values = np.zeros((3, x.shape[1]), dtype=float)
+        values[1] = U_inf * ramp
+        return values
 
 
 # Граничные условия
+inlet_velocity = InletVelocity()
 u_inlet = Function(V)
 u_inlet.interpolate(inlet_velocity)
 bcu_inflow = dirichletbc(u_inlet, locate_dofs_topological(V, 2, ft.find(inlet_marker)))
+bcu_floor = dirichletbc(u_inlet, locate_dofs_topological(V, 2, ft.find(floor_marker)))
+bcu_walls = dirichletbc(u_inlet, locate_dofs_topological(V, 2, ft.find(wall_marker)))
 
 u_nonslip = np.array((0,) * mesh.geometry.dim, dtype=float)
-bcu_walls = dirichletbc(u_nonslip, locate_dofs_topological(V, 2, ft.find(wall_marker)), V)
+# bcu_floor = dirichletbc(u_nonslip, locate_dofs_topological(V, 2, ft.find(floor_marker)), V)
+# bcu_walls = dirichletbc(u_nonslip, locate_dofs_topological(V, 2, ft.find(wall_marker)), V)
 bcu_car = dirichletbc(u_nonslip, locate_dofs_topological(V, 2, ft.find(car_marker)), V)
 
-bcu = [bcu_inflow, bcu_walls, bcu_car]
+bcu = [bcu_inflow, bcu_floor, bcu_walls, bcu_car]
 
-bcp_outlet = dirichletbc(0.0, locate_dofs_topological(Q, 2, ft.find(outlet_marker)), Q)
+bcp_outlet = dirichletbc(PETSc.ScalarType(0.0), locate_dofs_topological(Q, 2, ft.find(outlet_marker)), Q)
 
 bcp = [bcp_outlet]
 
@@ -117,36 +128,37 @@ A2.assemble()
 b2 = create_vector(extract_function_spaces(L2))
 
 a3 = form(dot(u, v) * dx)
-L3 = form(dot(u_s, v) * dx - k * dot(nabla_grad(p_ - p_n), v) * dx)
-A3 = assemble_matrix(a3)
+# вот здесь в статье плотность отсутствует, а она нужна
+L3 = form(dot(u_s, v) * dx - (k / rho) * dot(nabla_grad(p_ - p_n), v) * dx)
+A3 = assemble_matrix(a3, bcs=bcu)
 A3.assemble()
 b3 = create_vector(extract_function_spaces(L3))
 
 # Солверы
 solver1 = PETSc.KSP().create(mesh.comm)
 solver1.setOperators(A1)
-solver1.setType("bcgs")
+solver1.setType("bcgs")  # bicgstab
 pc1 = solver1.getPC()
-pc1.setType("ilu")
+pc1.setType("hypre")
+pc1.setHYPREType("boomeramg")
 solver1.setTolerances(rtol=1e-6, atol=1e-10)
 
+# Шаг 2: давление
 solver2 = PETSc.KSP().create(mesh.comm)
 solver2.setOperators(A2)
-solver2.setType("cg")
+solver2.setType("bcgs")  # bicgstab
 pc2 = solver2.getPC()
-try:
-    pc2.setType("hypre")
-    pc2.setHYPREType("boomeramg")
-except:
-    pc2.setType("gamg")
+pc2.setType("hypre")
+pc2.setHYPREType("boomeramg")
 solver2.setTolerances(rtol=1e-8, atol=1e-12)
 
+# Шаг 3: коррекция скорости (CG + SOR)
 solver3 = PETSc.KSP().create(mesh.comm)
 solver3.setOperators(A3)
-solver3.setType("cg")
+solver3.setType("cg")  # conjugate gradient
 pc3 = solver3.getPC()
-pc3.setType("sor")
-solver3.setTolerances(rtol=1e-6, atol=1e-10)
+pc3.setType("sor")  # successive over-relaxation
+solver3.setTolerances(rtol=1e-8, atol=1e-10)
 
 # Расчёт
 folder = Path(str(BASE_DIR / "results"))
@@ -159,6 +171,8 @@ progress = tqdm.autonotebook.tqdm(desc="Solving PDE", total=num_steps)
 for i in range(num_steps):
     progress.update(1)
     t += dt
+    inlet_velocity.t = t
+    u_inlet.interpolate(inlet_velocity)
 
     with b1.localForm() as loc:
         loc.set(0)
@@ -181,12 +195,26 @@ for i in range(num_steps):
     with b3.localForm() as loc:
         loc.set(0)
     assemble_vector(b3, L3)
+    apply_lifting(b3, [a3], [bcu])
     b3.ghostUpdate(addv=PETSc.InsertMode.ADD_VALUES, mode=PETSc.ScatterMode.REVERSE)
+    set_bc(b3, bcu)
     solver3.solve(b3, u_.x.petsc_vec)
     u_.x.scatter_forward()
 
-    vtx_u.write(t)
-    vtx_p.write(t)
+    if i % 10 == 0:
+        vtx_u.write(t)
+        vtx_p.write(t)
+
+        r1 = solver1.getResidualNorm()
+        r2 = solver2.getResidualNorm()
+        it1 = solver1.getIterationNumber()
+        it2 = solver2.getIterationNumber()
+
+        u_norm = u_.x.petsc_vec.norm()
+
+        print(f"t={t:.3f} | u_norm={u_norm:.3e} | "
+              f"KSP1: {it1}iter res={r1:.2e} | "
+              f"KSP2: {it2}iter res={r2:.2e}")
 
     with (
         u_.x.petsc_vec.localForm() as loc_,
@@ -198,3 +226,6 @@ for i in range(num_steps):
         p_n.x.petsc_vec.localForm() as loc_pn
     ):
         loc_p.copy(loc_pn)
+
+    u_n.x.petsc_vec.ghostUpdate(addv=PETSc.InsertMode.INSERT_VALUES, mode=PETSc.ScatterMode.FORWARD)
+    p_n.x.petsc_vec.ghostUpdate(addv=PETSc.InsertMode.INSERT_VALUES, mode=PETSc.ScatterMode.FORWARD)
