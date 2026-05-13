@@ -110,7 +110,7 @@ def sigma(u, p):
 
 
 F1 = rho * dot((u - u_n) / k, v) * dx
-F1 += rho * dot(dot(u_n, nabla_grad(u_n)), v) * dx
+F1 += rho * dot(dot(u_n, nabla_grad(u)), v) * dx
 F1 += inner(sigma((u + u_n) / 2, p_n), epsilon(v)) * dx
 F1 += dot(p_n * n, v) * ds
 F1 -= dot(mu * dot(nabla_grad((u + u_n) / 2), n), v) * ds
@@ -141,7 +141,7 @@ solver1.setType("bcgs")  # bicgstab
 pc1 = solver1.getPC()
 pc1.setType("hypre")
 pc1.setHYPREType("boomeramg")
-solver1.setTolerances(rtol=1e-6, atol=1e-10)
+solver1.setTolerances(rtol=1e-5, atol=1e-8)
 
 # Шаг 2: давление
 solver2 = PETSc.KSP().create(mesh.comm)
@@ -163,8 +163,8 @@ solver3.setTolerances(rtol=1e-8, atol=1e-10)
 # Расчёт
 folder = Path(str(BASE_DIR / "results"))
 folder.mkdir(exist_ok=True, parents=True)
-vtx_u = VTXWriter(mesh.comm, folder / "u5.bp", [u_], engine="BP4")
-vtx_p = VTXWriter(mesh.comm, folder / "p5.bp", [p_], engine="BP4")
+vtx_u = VTXWriter(mesh.comm, folder / "u8.bp", [u_], engine="BP4")
+vtx_p = VTXWriter(mesh.comm, folder / "p8.bp", [p_], engine="BP4")
 vtx_u.write(t)
 vtx_p.write(t)
 progress = tqdm.autonotebook.tqdm(desc="Solving PDE", total=num_steps)
@@ -173,6 +173,11 @@ for i in range(num_steps):
     t += dt
     inlet_velocity.t = t
     u_inlet.interpolate(inlet_velocity)
+
+    A1.zeroEntries()
+    assemble_matrix(A1, a1, bcs=bcu)
+    A1.assemble()
+    solver1.setOperators(A1)
 
     with b1.localForm() as loc:
         loc.set(0)
@@ -201,7 +206,7 @@ for i in range(num_steps):
     solver3.solve(b3, u_.x.petsc_vec)
     u_.x.scatter_forward()
 
-    if i % 10 == 0:
+    if i % 2 == 0:
         vtx_u.write(t)
         vtx_p.write(t)
 
