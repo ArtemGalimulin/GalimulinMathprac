@@ -11,12 +11,13 @@ from basix.ufl import element
 from dolfinx.fem import (
     Constant, Function, functionspace,
     dirichletbc, extract_function_spaces,
-    form, locate_dofs_topological,
+    form, locate_dofs_topological, Expression,
 )
 from dolfinx.fem.petsc import (
     apply_lifting, assemble_matrix, assemble_vector,
-    create_vector, set_bc,
+    create_vector, set_bc
 )
+from dolfinx.fem import assemble_scalar
 from dolfinx.io import VTXWriter, gmsh as gmshio
 from ufl import (
     FacetNormal, TestFunction, TrialFunction,
@@ -91,13 +92,16 @@ bcp = [bcp_outlet]
 u = TrialFunction(V)
 v = TestFunction(V)
 u_ = Function(V)
+u_.name = "Velocity"
 u_s = Function(V)
 u_n = Function(V)
 p = TrialFunction(Q)
 q = TestFunction(Q)
 p_ = Function(Q)
+p_.name = "Pressure"
 p_n = Function(Q)
 n = FacetNormal(mesh)
+ds_tagged = ds(subdomain_data=ft)
 f = Constant(mesh, np.zeros(3))
 
 
@@ -109,11 +113,16 @@ def sigma(u, p):
     return 2 * mu * epsilon(u) - p * Identity(3)
 
 
+traction = dot(sigma(u_, p_), -n)
+drag_form = form(traction[1] * ds_tagged(car_marker))
+# force_field = Function(V)
+# force_field.name = "TractionVector"
+
 F1 = rho * dot((u - u_n) / k, v) * dx
 F1 += rho * dot(dot(u_n, nabla_grad(u)), v) * dx
 F1 += inner(sigma((u + u_n) / 2, p_n), epsilon(v)) * dx
-F1 += dot(p_n * n, v) * ds
-F1 -= dot(mu * dot(nabla_grad((u + u_n) / 2), n), v) * ds
+# F1 += dot(p_n * n, v) * ds
+# F1 -= dot(mu * dot(nabla_grad((u + u_n) / 2), n), v) * ds
 F1 -= dot(f, v) * dx
 a1 = form(lhs(F1))
 L1 = form(rhs(F1))
@@ -163,10 +172,13 @@ solver3.setTolerances(rtol=1e-8, atol=1e-10)
 # Расчёт
 folder = Path(str(BASE_DIR / "results"))
 folder.mkdir(exist_ok=True, parents=True)
-vtx_u = VTXWriter(mesh.comm, folder / "u8.bp", [u_], engine="BP4")
-vtx_p = VTXWriter(mesh.comm, folder / "p8.bp", [p_], engine="BP4")
+vtx_u = VTXWriter(mesh.comm, folder / "u9.bp", [u_], engine="BP4")
+vtx_p = VTXWriter(mesh.comm, folder / "p9.bp", [p_], engine="BP4")
+# vtx_f = VTXWriter(mesh.comm, folder / "force.bp", [force_field], engine="BP4")
 vtx_u.write(t)
 vtx_p.write(t)
+# vtx_f.write(t)
+
 progress = tqdm.autonotebook.tqdm(desc="Solving PDE", total=num_steps)
 for i in range(num_steps):
     progress.update(1)
@@ -206,9 +218,14 @@ for i in range(num_steps):
     solver3.solve(b3, u_.x.petsc_vec)
     u_.x.scatter_forward()
 
+    drag_local = assemble_scalar(drag_form)
+    drag_global = mesh.comm.allreduce(drag_local, op=MPI.SUM)
+    # force_field.interpolate(Expression(traction, V.element.interpolation_points))
+
     if i % 2 == 0:
         vtx_u.write(t)
         vtx_p.write(t)
+        # vtx_f.write(t)
 
         r1 = solver1.getResidualNorm()
         r2 = solver2.getResidualNorm()
@@ -217,7 +234,7 @@ for i in range(num_steps):
 
         u_norm = u_.x.petsc_vec.norm()
 
-        print(f"t={t:.3f} | u_norm={u_norm:.3e} | "
+        print(f"t={t:.3f} | Drag={drag_global:.4f} | u_norm={u_norm:.3e} | "
               f"KSP1: {it1}iter res={r1:.2e} | "
               f"KSP2: {it2}iter res={r2:.2e}")
 

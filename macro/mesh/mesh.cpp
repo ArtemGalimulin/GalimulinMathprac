@@ -81,40 +81,33 @@ int main(int argc, char** argv) {
   gmsh::model::addPhysicalGroup(2, sl, 5, "car_wall");
   gmsh::model::addPhysicalGroup(3, {volAir}, 6, "air");
 
-  int f = gmsh::model::mesh::field::add("MathEval");
-  gmsh::model::mesh::field::setString(f, "F", "0.3");
-  gmsh::model::mesh::field::setAsBackgroundMesh(f);
+  // int f = gmsh::model::mesh::field::add("MathEval");
+  // gmsh::model::mesh::field::setString(f, "F", "0.3");
+  // gmsh::model::mesh::field::setAsBackgroundMesh(f);
 
-  // int f_dist = gmsh::model::mesh::field::add("Distance");
-  // gmsh::model::mesh::field::setNumbers(f_dist, "SurfacesList", {sl.begin(), sl.end()});
-  //
-  // // 2. Настраиваем пороги изменения размера
-  // int f_thresh = gmsh::model::mesh::field::add("Threshold");
-  // gmsh::model::mesh::field::setNumber(f_thresh, "InField", f_dist);
-  //
-  // // Размер ячейки непосредственно НА машине (например, 5 см)
-  // gmsh::model::mesh::field::setNumber(f_thresh, "SizeMin", 0.05);
-  // // Размер ячейки вдали от машины (например, 50 см)
-  // gmsh::model::mesh::field::setNumber(f_thresh, "SizeMax", 1.5);
-  // // Расстояние от машины, до которого размер будет равен SizeMin
-  // gmsh::model::mesh::field::setNumber(f_thresh, "DistMin", 0.3);
-  // // Расстояние, на котором размер плавно вырастет до SizeMax
-  // gmsh::model::mesh::field::setNumber(f_thresh, "DistMax", 1.0);
-  //
-  // // Устанавливаем это поле как основное для построения сетки
-  // gmsh::model::mesh::field::setAsBackgroundMesh(f_thresh);
-  //
-  // // Отключаем влияние других факторов, чтобы работали только наши поля
-  // gmsh::option::setNumber("Mesh.MeshSizeExtendFromBoundary", 0);
-  // gmsh::option::setNumber("Mesh.MeshSizeFromPoints", 0);
-  // gmsh::option::setNumber("Mesh.MeshSizeFromCurvature", 0);
+  int f_dist = gmsh::model::mesh::field::add("Distance");
+  gmsh::model::mesh::field::setNumbers(f_dist, "SurfacesList", std::vector<double>(sl.begin(), sl.end()));
+
+  int f_thresh = gmsh::model::mesh::field::add("Threshold");
+  gmsh::model::mesh::field::setNumber(f_thresh, "InField", f_dist);
+  gmsh::model::mesh::field::setNumber(f_thresh, "SizeMin", 0.08); // Оптимально для скорости
+  gmsh::model::mesh::field::setNumber(f_thresh, "SizeMax", 1.0);
+  gmsh::model::mesh::field::setNumber(f_thresh, "DistMin", 0.2);
+  gmsh::model::mesh::field::setNumber(f_thresh, "DistMax", 1.5);
+
+  gmsh::model::mesh::field::setAsBackgroundMesh(f_thresh);
+
+  // Эти опции обязательны, чтобы Gmsh не игнорировал твои настройки
+  gmsh::option::setNumber("Mesh.MeshSizeExtendFromBoundary", 0);
+  gmsh::option::setNumber("Mesh.MeshSizeFromPoints", 0);
+  gmsh::option::setNumber("Mesh.MeshSizeFromCurvature", 0);
 
   gmsh::option::setNumber("Mesh.MaxNumThreads3D", 8);
   gmsh::option::setNumber("Mesh.Algorithm3D", 1);
   gmsh::option::setNumber("Mesh.Optimize", 0);
 
   gmsh::model::mesh::generate(3);
-  gmsh::write("light_03.msh");
+  gmsh::write("light_03_relative.msh");
 
   std::set<std::string> args(argv, argv + argc);
   if (!args.count("-nopopup")) gmsh::fltk::run();
