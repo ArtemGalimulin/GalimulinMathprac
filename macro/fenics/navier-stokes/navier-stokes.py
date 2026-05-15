@@ -35,7 +35,7 @@ model_rank = 0
 
 inlet_marker, outlet_marker, wall_marker, floor_marker, car_marker, air_marker = 1, 2, 3, 4, 5, 6
 gmsh.initialize()
-gmsh.merge(str(BASE_DIR / "light_03_relative.msh"))
+gmsh.merge(str(BASE_DIR / "final_mesh_real.msh"))
 mesh_data = gmshio.model_to_mesh(gmsh.model, mesh_comm, model_rank, gdim=3)
 mesh = mesh_data.mesh
 ft = mesh_data.facet_tags
@@ -43,14 +43,15 @@ ct = mesh_data.cell_tags
 gmsh.finalize()
 
 t = 0.0
-T = 3.0
-t_acc = 0.1
+T = 10.0
+t_acc = 0.2
 dt = 0.005
 num_steps = int(T / dt)
+save_freq = 5
 U_inf = 10.0
 k = Constant(mesh, dt)
 mu = Constant(mesh, 0.1)
-rho = Constant(mesh, 1.0)
+rho = Constant(mesh, 1.2)
 
 v_cg2 = element("Lagrange", mesh.basix_cell(), 2, shape=(mesh.geometry.dim,))
 s_cg1 = element("Lagrange", mesh.basix_cell(), 1)
@@ -78,8 +79,6 @@ bcu_floor = dirichletbc(u_inlet, locate_dofs_topological(V, 2, ft.find(floor_mar
 bcu_walls = dirichletbc(u_inlet, locate_dofs_topological(V, 2, ft.find(wall_marker)))
 
 u_nonslip = np.array((0,) * mesh.geometry.dim, dtype=float)
-# bcu_floor = dirichletbc(u_nonslip, locate_dofs_topological(V, 2, ft.find(floor_marker)), V)
-# bcu_walls = dirichletbc(u_nonslip, locate_dofs_topological(V, 2, ft.find(wall_marker)), V)
 bcu_car = dirichletbc(u_nonslip, locate_dofs_topological(V, 2, ft.find(car_marker)), V)
 
 bcu = [bcu_inflow, bcu_floor, bcu_walls, bcu_car]
@@ -115,6 +114,7 @@ def sigma(u, p):
 
 traction = dot(sigma(u_, p_), -n)
 drag_form = form(traction[1] * ds_tagged(car_marker))
+lift_form = form(traction[2] * ds_tagged(car_marker))
 # force_field = Function(V)
 # force_field.name = "TractionVector"
 
@@ -170,18 +170,22 @@ pc3.setType("sor")  # successive over-relaxation
 solver3.setTolerances(rtol=1e-8, atol=1e-10)
 
 # Расчёт
-folder = Path(str(BASE_DIR / "results"))
+folder = Path(str(BASE_DIR / "results_benchmark"))
 folder.mkdir(exist_ok=True, parents=True)
-vtx_u = VTXWriter(mesh.comm, folder / "u9.bp", [u_], engine="BP4")
-vtx_p = VTXWriter(mesh.comm, folder / "p9.bp", [p_], engine="BP4")
-# vtx_f = VTXWriter(mesh.comm, folder / "force.bp", [force_field], engine="BP4")
+vtx_u = VTXWriter(mesh.comm, folder / "benchmark_u.bp", [u_], engine="BP4")
+vtx_p = VTXWriter(mesh.comm, folder / "benchmark_p.bp", [p_], engine="BP4")
 vtx_u.write(t)
 vtx_p.write(t)
-# vtx_f.write(t)
+
+if mesh_comm.rank == 0:
+    with open(folder / "benchmark_log.txt", "w") as f_log:
+        f_log.write("Time, Drag, Lift, U_norm\n")
 
 progress = tqdm.autonotebook.tqdm(desc="Solving PDE", total=num_steps)
+
 for i in range(num_steps):
-    progress.update(1)
+    if mesh_comm.rank == 0:
+        progress.update(1)
     t += dt
     inlet_velocity.t = t
     u_inlet.interpolate(inlet_velocity)
@@ -220,23 +224,27 @@ for i in range(num_steps):
 
     drag_local = assemble_scalar(drag_form)
     drag_global = mesh.comm.allreduce(drag_local, op=MPI.SUM)
-    # force_field.interpolate(Expression(traction, V.element.interpolation_points))
 
-    if i % 2 == 0:
+    lift_local = assemble_scalar(lift_form)
+    lift_global = mesh.comm.allreduce(lift_local, op=MPI.SUM)
+
+    if (i + 1) % save_freq == 0:
+        u_norm = u_.x.petsc_vec.norm()
+
         vtx_u.write(t)
         vtx_p.write(t)
-        # vtx_f.write(t)
+
+        if mesh.comm.rank == 0:
+            with open(folder / "benchmark_log.txt", "a") as f_log:
+                f_log.write(f"{t:.4f}, {drag_global:.6f}, {lift_global:.6f}, {u_norm:.6e}\n")
 
         r1 = solver1.getResidualNorm()
         r2 = solver2.getResidualNorm()
         it1 = solver1.getIterationNumber()
         it2 = solver2.getIterationNumber()
 
-        u_norm = u_.x.petsc_vec.norm()
-
-        print(f"t={t:.3f} | Drag={drag_global:.4f} | u_norm={u_norm:.3e} | "
-              f"KSP1: {it1}iter res={r1:.2e} | "
-              f"KSP2: {it2}iter res={r2:.2e}")
+        print(f"t={t:.3f} | Drag={drag_global:.4f} | Lift={lift_global:.4f} | u_norm={u_norm:.3e} | "
+              f"KSP1: {it1}it | KSP2: {it2}it")
 
     with (
         u_.x.petsc_vec.localForm() as loc_,
